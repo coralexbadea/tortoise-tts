@@ -1,104 +1,104 @@
-import os
-import functools
-import math
+import os #working with directories
+import functools # higher order functions
+import math #math operations
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torchaudio
-from tortoise.models.xtransformers import ContinuousTransformerWrapper, RelativePositionBias
-
-
-def zero_module(module):
-    """
-    Zero out the parameters of a module and return it.
-    """
-    for p in module.parameters():
-        p.detach().zero_()
-    return module
-
-
-class GroupNorm32(nn.GroupNorm):
-    def forward(self, x):
-        return super().forward(x.float()).type(x.dtype)
-
-
-def normalization(channels):
-    """
+import torch #ML library
+import torch.nn as nn #base class for all newral network modules
+import torch.nn.functional as F #functions related to NN
+import torchaudio #torch library for audio handling
+from tortoise.models.xtransformers import ContinuousTransformerWrapper, RelativePositionBias #undefined
+#undefined
+#undefined
+def zero_module(module):#zero out the parameters of a module
+    """#undefined
+    Zero out the parameters of a module and return it.#undefined
+    """#undefined
+    for p in module.parameters(): #for each parameters in module
+        p.detach().zero_()#The gradients of the tensor are no longer computed and values set to 0
+    return module#return that module
+#undefined    
+#undefined
+class GroupNorm32(nn.GroupNorm):#perform GN on float32
+    def forward(self, x):#forward function
+        return super().forward(x.float()).type(x.dtype)#perform gorup_norm using floats and returns x original type
+#undefined
+#undefined
+def normalization(channels):#normalization function
+    """#undefined
     Make a standard normalization layer.
 
-    :param channels: number of input channels.
-    :return: an nn.Module for normalization.
+    :param channels: number of input channels. #number of input channels
+    :return: an nn.Module for normalization. #return a module
     """
-    groups = 32
-    if channels <= 16:
-        groups = 8
-    elif channels <= 64:
-        groups = 16
-    while channels % groups != 0:
-        groups = int(groups / 2)
-    assert groups > 2
-    return GroupNorm32(groups, channels)
-
-
-class QKVAttentionLegacy(nn.Module):
-    """
+    groups = 32 #32 groups
+    if channels <= 16: #if channels <= 16
+        groups = 8 #groups is now 8
+    elif channels <= 64: #else if channels <=64
+        groups = 16 #groups is now 16
+    while channels % groups != 0: #while if we cant divide exactly channles by groups
+        groups = int(groups / 2) #divide groups by 2, eventualy it can be 1 which is instance normalization
+    assert groups > 2 #we make sure that groups is bigger than 2 so that it is still GN and not IN
+    return GroupNorm32(groups, channels) #return a module of GN that takes groups and channels size
+#undefined
+#undefined
+class QKVAttentionLegacy(nn.Module): #we will perform QKV attention in this module
+    """#undefined
     A module which performs QKV attention. Matches legacy QKVAttention + input/ouput heads shaping
-    """
+    """#undefined
 
-    def __init__(self, n_heads):
-        super().__init__()
-        self.n_heads = n_heads
+    def __init__(self, n_heads):#init
+        super().__init__()#call super init
+        self.n_heads = n_heads #number of heads
 
-    def forward(self, qkv, mask=None, rel_pos=None):
+    def forward(self, qkv, mask=None, rel_pos=None):#forward function taking qvk vector
         """
         Apply QKV attention.
 
-        :param qkv: an [N x (H * 3 * C) x T] tensor of Qs, Ks, and Vs.
-        :return: an [N x (H * C) x T] tensor after attention.
+        :param qkv: an [N x (H * 3 * C) x T] tensor of Qs, Ks, and Vs.#so the 3 comes from the 3 tensors
+        :return: an [N x (H * C) x T] tensor after attention. #so one transformer token is [N x (H * C) x T]
         """
-        bs, width, length = qkv.shape
-        assert width % (3 * self.n_heads) == 0
-        ch = width // (3 * self.n_heads)
-        q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = torch.einsum(
-            "bct,bcs->bts", q * scale, k * scale
-        )  # More stable with f16 than dividing afterwards
-        if rel_pos is not None:
-            weight = rel_pos(weight.reshape(bs, self.n_heads, weight.shape[-2], weight.shape[-1])).reshape(bs * self.n_heads, weight.shape[-2], weight.shape[-1])
-        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
-        if mask is not None:
-            # The proper way to do this is to mask before the softmax using -inf, but that doesn't work properly on CPUs.
-            mask = mask.repeat(self.n_heads, 1).unsqueeze(1)
-            weight = weight * mask
-        a = torch.einsum("bts,bcs->bct", weight, v)
+        bs, width, length = qkv.shape #batchsize, width, length of the tensor
+        assert width % (3 * self.n_heads) == 0 #assert if width can be divided exactly by 3 * numheads
+        ch = width // (3 * self.n_heads) #get channels size and the width divided by 3 * numheads
+        q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1) #so we reshape putting heads first, then split into three by taking section size as ch
+        scale = 1 / math.sqrt(math.sqrt(ch)) #the scale is 1/sqrt(sqrt(chanelsize))
+        weight = torch.einsum(#perform einstein sum with q and k scaled
+            "bct,bcs->bts", q * scale, k * scale #we transpose the cannels t and c from q and them multiply with k and keep batch dimension
+        )  # More stable with f16 than dividing afterwards # it seems that we are using f16
+        if rel_pos is not None: #if rel_pos is not none
+            weight = rel_pos(weight.reshape(bs, self.n_heads, weight.shape[-2], weight.shape[-1])).reshape(bs * self.n_heads, weight.shape[-2], weight.shape[-1]) #perform le position on the weights reshaped as b,heads,t,s
+        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype) #perform softmax on the last dimension
+        if mask is not None: #if mask is not None
+            # The proper way to do this is to mask before the softmax using -inf, but that doesn't work properly on CPUs. #apply mask after softmax
+            mask = mask.repeat(self.n_heads, 1).unsqueeze(1)#repeat the mask for all the heads then unsqeeze since heads are not delimited explicitly
+            weight = weight * mask #perform masking
+        a = torch.einsum("bts,bcs->bct", weight, v) #multiply with v to obtain again the bct shape
 
-        return a.reshape(bs, -1, length)
+        return a.reshape(bs, -1, length)# finnaly reshape again from heads first to heads inside
 
 
-class AttentionBlock(nn.Module):
+class AttentionBlock(nn.Module): #AttentionBlock as module
     """
-    An attention block that allows spatial positions to attend to each other.
+    An attention block that allows spatial positions to attend to each other.# we are using spatial positions
 
     Originally ported from here, but adapted to the N-d case.
-    https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/models/unet.py#L66.
+    https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/models/unet.py#L66.#unet from a diffusion model
     """
 
-    def __init__(
+    def __init__(#init function
         self,
-        channels,
-        num_heads=1,
-        num_head_channels=-1,
-        do_checkpoint=True,
-        relative_pos_embeddings=False,
+        channels,#channels
+        num_heads=1,#num_heads
+        num_head_channels=-1,#num_head_channels_size as many as posible
+        do_checkpoint=True,# do checkpoint
+        relative_pos_embeddings=False, # relative position elbedings
     ):
-        super().__init__()
-        self.channels = channels
-        self.do_checkpoint = do_checkpoint
-        if num_head_channels == -1:
-            self.num_heads = num_heads
-        else:
+        super().__init__() #super call
+        self.channels = channels #channels
+        self.do_checkpoint = do_checkpoint #do checkpoint
+        if num_head_channels == -1: #if as many as possible nun_head_channels size
+            self.num_heads = num_heads #num heads
+        else:       
             assert (
                 channels % num_head_channels == 0
             ), f"q,k,v channels {channels} is not divisible by num_head_channels {num_head_channels}"
