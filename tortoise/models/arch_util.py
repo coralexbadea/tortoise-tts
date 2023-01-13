@@ -98,12 +98,12 @@ class AttentionBlock(nn.Module): #AttentionBlock as module
         self.do_checkpoint = do_checkpoint #do checkpoint
         if num_head_channels == -1: #if as many as possible nun_head_channels size
             self.num_heads = num_heads #num heads
-        else:       
-            assert (
-                channels % num_head_channels == 0
+        else:#else       
+            assert ( #assert
+                channels % num_head_channels == 0 #check if channels can be divided by num_head_channels
             ), f"q,k,v channels {channels} is not divisible by num_head_channels {num_head_channels}"
-            self.num_heads = channels // num_head_channels
-        self.norm = normalization(channels)
+            self.num_heads = channels // num_head_channels #numheads are channels divided by heads dimension
+        self.norm = normalization(channels)#noramalization of Groups
         self.qkv = nn.Conv1d(channels, channels * 3, 1)
         # split heads before split qkv
         self.attention = QKVAttentionLegacy(self.num_heads)
